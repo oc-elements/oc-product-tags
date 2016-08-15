@@ -1,34 +1,213 @@
 <link rel="import" href="../polymer/polymer.html">
+<link rel="import" href="../iron-icons/iron-icons.html">
+<link rel="import" href="../iron-collapse/iron-collapse.html">
+<link rel="import" href="../iron-data-table/iron-data-table.html">
+<link rel="import" href="../paper-icon-button/paper-icon-button.html">
+<link rel="import" href="../paper-toggle-button/paper-toggle-button.html">
+<link rel="import" href="../paper-material/paper-material.html">
+<link rel="import" href="../paper-input/paper-input.html">
+<link rel="import" href="../paper-input/paper-textarea.html">
+<link rel="import" href="../paper-progress/paper-progress.html">
+<link rel="import" href="../paper-fab/paper-fab.html">
 
-<!--
-`oc-product-tags`
-Element to create and manage tags on the Ordercloud platform
-
-@demo demo/index.html 
--->
+<link rel="import" href="../oc-core-utils/oc-api-consumer-behaviour.html">
+<link rel="import" href="../oc-core-utils/oc-app-styles.html">
+<link rel="import" href="../oc-iron-data-table-styles/oc-iron-data-table-styles.html">
+<link rel="import" href="../oc-product-tag-api.html">
 
 <dom-module id="oc-product-tags">
+
+  <style include="oc-app-styles oc-iron-data-table-styles">
+    :host {
+      display: block;
+    }
+    paper-material {
+      background-color: #fff;
+    }
+    #tagForm paper-material {
+      margin-top: 1em;
+      padding: 1em;
+    }
+    #tagForm .save {
+      background-color: var(--primary-color);
+      color: #fff;
+    }
+    #tagForm paper-textarea {
+      margin-bottom: 1em;
+    }
+    iron-data-table[empty] {
+      height: 74px;
+    }
+    paper-fab {
+      --paper-fab-background: #f05050;
+      --paper-fab-keyboard-focus-background: #ff0000;
+      position: fixed;
+      bottom: 1em;
+      right: 1em;
+    }
+  </style>
   <template>
-    <style>
-      :host {
-        display: block;
-      }
-    </style>
-    <h2>Hello [[prop1]]</h2>
+    <iron-collapse id="tagsList" opened>
+      <paper-progress indeterminate hidden$="[[ !loading ]]"></paper-progress>
+
+      <paper-material>
+        <iron-data-table items="[[ tags ]]" empty$="[[ _isTagsEmpty(tags) ]]">
+          <data-table-column name="Name" sort-by="name" filter-by="name" flex="6">
+            <template>[[ item.name ]]</template>
+          </data-table-column>
+          <data-table-column name="Short Description" sort-by="shortDescription" filter-by="shortDescription" flex="9">
+            <template>[[ item.shortDescription ]]</template>
+          </data-table-column>
+          <data-table-column name="Description" sort-by="description" filter-by="description" flex="12">
+            <template>[[ item.description ]]</template>
+          </data-table-column>
+          <data-table-column name="Enabled" flex="0" width="50px">
+            <template>
+              <paper-toggle-button checked$="[[ item.enabled ]]" on-change="_toggleTagEnabled"></paper-toggle-button>
+            </template>
+          </data-table-column>
+          <data-table-column flex="0" width="80px">
+            <template>
+              <paper-icon-button icon="icons:delete" on-tap="_deleteTag"></paper-icon-button>
+              <paper-icon-button icon="icons:create" on-tap="_editTagBtnClicked"></paper-icon-button>
+            </template>
+          </data-table-column>
+        </iron-data-table>
+      </paper-material>
+
+      <p hidden$="[[ !_isTagsEmpty(tags, tagsError) ]]" class="error-message">No tags found, you can create some now</p>
+      <p hidden$="[[ !tagsError ]]" class="error-message">Failed to load tags</p>
+    </iron-collapse>
+
+    <iron-collapse id="tagForm">
+      <paper-material>
+        <paper-input id="nameInput" label="Name" value="{{ editingTag.name }}" required></paper-input>
+        <paper-input label="Short Description" value="{{ editingTag.shortDescription }}"></paper-input>
+        <paper-textarea label="Description" value="{{ editingTag.description }}"></paper-textarea>
+        <paper-icon-button icon="icons:save" class="save" on-tap="_saveTag"></paper-icon-button>
+        <paper-icon-button icon="icons:clear" on-tap="_closeTagForm"></paper-icon-button>
+      </paper-material>
+    </iron-collapse>
+
+    <paper-fab icon="icons:add" on-tap="_openNewTagForm"></paper-fab>
+
+    <oc-product-tag-api id="tagApi"></oc-product-tag-api>
   </template>
 
   <script>
     Polymer({
-
       is: 'oc-product-tags',
+      behaviors: [OC.Behaviours.ApiConsumer],
 
       properties: {
-        prop1: {
-          type: String,
-          value: 'oc-product-tags',
-        },
+        organisationId: Number,
+        tagType: String,
+        loading: {
+          type: Boolean,
+          notify: true
+        }
       },
+
+      observers: [
+        'refresh(tagType, organisationId)'
+      ],
+
+      refresh: function() {
+        if (!this.tagType) {
+          return;
+        }
+
+        this.tagsError = false;
+        this.loading = true;
+        this.tags = null;
+        this.$.tagApi.getTags(this.tagType, {pageSize: -1, showDisabled: true})
+                .then(this._setPropertyResponseResults.bind(this, 'tags'))
+                .catch(function() {
+                  this.tagsError = true;
+                  this.fire('toast', 'Failed to fetch tags');
+                }.bind(this))
+                .finally(function() {
+                  this.loading = false;
+                }.bind(this));
+      },
+
+      _toggleTagEnabled: function(event) {
+        var toggleBtn = event.target,
+                tag = event.model.item;
+        this.$.tagApi.toggleEnabled(tag.id, toggleBtn.checked)
+                .then(this.fire.bind(this, 'toast', '"' + tag.name + '" tag ' + (toggleBtn.checked ? 'enabled' : 'disabled')))
+                .catch(function() {
+                  this.fire('toast', 'Failed to ' + (toggleBtn.checked ? 'enabled' : 'disabled') + ' "' + tag.name + '" tag');
+                  toggleBtn.checked = tag.enabled === 'enabled';
+                }.bind(this));
+      },
+      _editTagBtnClicked: function(event) {
+        this.editingTag = {
+          id: event.model.item.id,
+          name: event.model.item.name,
+          description: event.model.item.description,
+          shortDescription: event.model.item.shortDescription
+        };
+        this._openTagForm();
+      },
+      _saveTag: function() {
+        var tag = this.editingTag;
+
+        if ('id' in tag) {
+          this._editTag(tag);
+        }
+        else {
+          this._createTag(tag);
+        }
+
+        this._closeTagForm();
+      },
+      _editTag: function(tag) {
+        this.$.tagApi.updateTag(tag)
+                .then(this.refresh.bind(this))
+                .then(this.fire.bind(this, 'toast', '"' + tag.name + '" tag updated'))
+                .catch(this.fire.bind(this, 'toast', 'Failed to update "' + tag.name + '" tag'));
+      },
+      _createTag: function(tag) {
+        tag.tagType = this.tagType;
+        tag.organisationId = this.organisationId;
+        this.$.tagApi.createTag(tag)
+                .then(this.refresh.bind(this))
+                .then(this.fire.bind(this, 'toast', '"' + tag.name + '" tag created'))
+                .catch(this.fire.bind(this, 'toast', 'Failed to create "' + tag.name + '" tag'));
+      },
+      _deleteTag: function(event) {
+        var tag = event.model.item;
+        this.$.tagApi.deleteTag(tag.id)
+                .then(this.refresh.bind(this))
+                .then(this.fire.bind(this, 'toast', '"' + tag.name + '" tag deleted'))
+                .catch(this.fire.bind(this, 'toast', 'Failed to delete "' + tag.name + '" tag'));
+      },
+
+      _openNewTagForm: function() {
+        this.editingTag = {
+          name: '',
+          description: '',
+          shortDescription: ''
+        };
+        this._openTagForm();
+      },
+      _openTagForm: function() {
+        this.$.tagForm.show();
+        this.$.tagsList.hide();
+        this.$.nameInput.focus();
+      },
+      _closeTagForm: function() {
+        this.$.tagForm.hide();
+        this.$.tagsList.show();
+        this.editingTag = null;
+      },
+
+      _isTagsEmpty: function(tags, error) {
+        return !error && tags && tags.length === 0;
+      }
 
     });
   </script>
+
 </dom-module>
